@@ -72,8 +72,7 @@ const pendingGAtom = Atom.make(false).pipe(Atom.keepAlive)
 const detailFullViewAtom = Atom.make(false).pipe(Atom.keepAlive)
 const detailScrollOffsetAtom = Atom.make(0).pipe(Atom.keepAlive)
 
-const GROUP_ICONS = ["▸", "◆", "●", "▪", "›", "◈", "▹", "◉", "⬥", "⏵", "⊡", "⬩"] as const
-const groupIconIndexAtom = Atom.make(0).pipe(Atom.keepAlive)
+const GROUP_ICON = "◆"
 
 interface LabelModalState {
 	readonly open: boolean
@@ -758,18 +757,31 @@ const DetailBody = ({
 	)
 }
 
+const DetailPlaceholder = ({ text, paneWidth }: { text: string; paneWidth: number }) => (
+	<box flexDirection="column">
+		<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+			<PlainLine text={text} fg={colors.muted} />
+			<BlankRow />
+			<BlankRow />
+		</box>
+		<box height={1}><Divider width={paneWidth} /></box>
+	</box>
+)
+
 const DetailsPane = ({
 	pullRequest,
 	contentWidth,
 	bodyLines = DETAIL_BODY_LINES,
 	paneWidth = contentWidth + 2,
 	showChecks = false,
+	placeholderText = "Select a pull request with up/down.",
 }: {
 	pullRequest: PullRequestItem | null
 	contentWidth: number
 	bodyLines?: number
 	paneWidth?: number
 	showChecks?: boolean
+	placeholderText?: string
 }) => {
 	const titleLines = pullRequest ? wrapText(pullRequest.title, Math.max(1, paneWidth - 2)).length : 1
 	const uniqueChecks = pullRequest ? deduplicateChecks(pullRequest.checks) : []
@@ -780,7 +792,7 @@ const DetailsPane = ({
 		() => (pullRequest ? bodyPreview(pullRequest.body, contentWidth, bodyLines) : []),
 		[pullRequest?.body, contentWidth, bodyLines],
 	)
-	const contentHeight = titleLines + 2 + 1 + checksHeight + previewLines.length
+	const contentHeight = pullRequest ? titleLines + 2 + 1 + checksHeight + previewLines.length : bodyLines + 4
 
 	return (
 		<box flexDirection="column" height={contentHeight}>
@@ -790,12 +802,14 @@ const DetailsPane = ({
 					<DetailBody pullRequest={pullRequest} contentWidth={contentWidth} bodyLines={bodyLines} />
 				</>
 			) : (
-				<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-					<PlainLine text="Select a pull request with up/down." fg={colors.muted} />
-					{Array.from({ length: DETAIL_BODY_LINES + 2 }, (_, index) => (
-						<BlankRow key={index} />
-					))}
-				</box>
+				<>
+					<DetailPlaceholder text={placeholderText} paneWidth={paneWidth} />
+					<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+						{Array.from({ length: bodyLines }, (_, index) => (
+							<BlankRow key={index} />
+						))}
+					</box>
+				</>
 			)}
 		</box>
 	)
@@ -910,8 +924,7 @@ export const App = () => {
 	const addPullRequestLabel = useAtomSet(addPullRequestLabelAtom, { mode: "promise" })
 	const removePullRequestLabel = useAtomSet(removePullRequestLabelAtom, { mode: "promise" })
 	const toggleDraftStatus = useAtomSet(toggleDraftAtom, { mode: "promise" })
-	const [groupIconIndex, setGroupIconIndex] = useAtom(groupIconIndexAtom)
-	const groupIcon = GROUP_ICONS[groupIconIndex % GROUP_ICONS.length]!
+	const groupIcon = GROUP_ICON
 	const contentWidth = Math.max(60, width ?? 100)
 	const isWideLayout = (width ?? 100) >= 100
 	const splitGap = 1
@@ -1016,6 +1029,15 @@ export const App = () => {
 	}, [visiblePullRequests.length])
 
 	const selectedPullRequest = visiblePullRequests[selectedIndex] ?? null
+	const detailPlaceholderText = pullRequestStatus === "loading"
+		? "Loading pull requests..."
+		: pullRequestStatus === "error"
+			? pullRequestError ?? "Could not load pull requests."
+			: visiblePullRequests.length === 0 && visibleFilterText.length > 0
+				? "No matching pull requests."
+				: visiblePullRequests.length === 0
+					? "No open pull requests."
+					: "Select a pull request with up/down."
 	const titleWrapWidth = Math.max(1, rightPaneWidth - 2) // account for paddingLeft/paddingRight in detail pane
 	const titleLines = selectedPullRequest ? wrapText(selectedPullRequest.title, titleWrapWidth).length : 1
 	const detailDividerRow = 1 + titleLines + 1 // info row + title lines + labels row
@@ -1324,14 +1346,6 @@ export const App = () => {
 			openLabelModal()
 			return
 		}
-		if (key.name === "p" || key.name === "P") {
-			setGroupIconIndex((current) => {
-				const next = (current + 1) % GROUP_ICONS.length
-				flashNotice(`icon: ${GROUP_ICONS[next]}`)
-				return next
-			})
-			return
-		}
 		if (key.name === "o" && selectedPullRequest) {
 			void Bun.spawn({ cmd: ["open", selectedPullRequest.url], stdout: "ignore", stderr: "ignore" })
 			flashNotice(`Opened #${selectedPullRequest.number} in browser`)
@@ -1404,6 +1418,7 @@ export const App = () => {
 							bodyLines={fullscreenBodyLines}
 							paneWidth={contentWidth}
 							showChecks
+							placeholderText={detailPlaceholderText}
 						/>
 					</scrollbox>
 				</box>
@@ -1424,9 +1439,7 @@ export const App = () => {
 								</scrollbox>
 							</>
 						) : (
-							<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-								<PlainLine text="Select a pull request with up/down." fg={colors.muted} />
-							</box>
+							<DetailPlaceholder text={detailPlaceholderText} paneWidth={rightPaneWidth} />
 						)}
 					</box>
 				</box>
@@ -1438,12 +1451,13 @@ export const App = () => {
 							contentWidth={fullscreenContentWidth}
 							bodyLines={fullscreenBodyLines}
 							paneWidth={contentWidth}
+							placeholderText={detailPlaceholderText}
 						/>
 					</scrollbox>
 				</box>
 			) : (
 				<>
-					<DetailsPane pullRequest={selectedPullRequest} contentWidth={rightContentWidth} paneWidth={contentWidth} />
+					<DetailsPane pullRequest={selectedPullRequest} contentWidth={rightContentWidth} paneWidth={contentWidth} placeholderText={detailPlaceholderText} />
 					<Divider width={contentWidth} />
 					<box flexGrow={1} flexDirection="column">
 						<scrollbox flexGrow={1}>
