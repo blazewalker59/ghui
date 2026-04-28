@@ -66,6 +66,14 @@ interface RetryProgress {
 	readonly max: number
 }
 
+interface DetailPlaceholderInput {
+	readonly status: LoadStatus
+	readonly retryProgress: RetryProgress | null
+	readonly loadingIndicator: string
+	readonly visibleCount: number
+	readonly filterText: string
+}
+
 const pullRequestReferencePattern = /(#[0-9]+)/g
 const PR_FETCH_RETRIES = 6
 const DETAIL_PLACEHOLDER_ROWS = 4
@@ -306,6 +314,47 @@ const labelTextColor = (color: string) => {
 		return luminance > 0.6 ? "#111111" : "#f8fafc"
 	}
 	return "#f8fafc"
+}
+
+const getDetailPlaceholderContent = ({
+	status,
+	retryProgress,
+	loadingIndicator,
+	visibleCount,
+	filterText,
+}: DetailPlaceholderInput): DetailPlaceholderContent => {
+	if (status === "loading") {
+		return {
+			title: `${loadingIndicator} Loading pull requests`,
+			hint: retryProgress ? `Retry ${retryProgress.attempt}/${retryProgress.max}` : "Fetching latest open PRs",
+		}
+	}
+
+	if (status === "error") {
+		return {
+			title: "Could not load pull requests",
+			hint: "Press r to retry",
+		}
+	}
+
+	if (visibleCount === 0 && filterText.length > 0) {
+		return {
+			title: "No matching pull requests",
+			hint: "Press esc to clear the filter",
+		}
+	}
+
+	if (visibleCount === 0) {
+		return {
+			title: "No open pull requests",
+			hint: "Press r to refresh",
+		}
+	}
+
+	return {
+		title: "Select a pull request",
+		hint: "Use up/down to move",
+	}
 }
 
 const bodyPreview = (body: string, width: number, limit = DETAIL_BODY_LINES): Array<PreviewLine> => {
@@ -850,8 +899,8 @@ const DetailBody = ({
 	)
 }
 
-const DetailPlaceholder = ({ content, paneWidth }: { content: DetailPlaceholderContent; paneWidth: number }) => {
-	const innerWidth = Math.max(1, paneWidth - 2)
+const StatusCard = ({ content, width }: { content: DetailPlaceholderContent; width: number }) => {
+	const innerWidth = Math.max(1, width - 2)
 	const cardWidth = Math.min(innerWidth, Math.max(28, content.title.length + 4, content.hint.length + 4))
 	const offset = " ".repeat(Math.max(0, Math.floor((innerWidth - cardWidth) / 2)))
 	const cardInnerWidth = Math.max(1, cardWidth - 2)
@@ -868,14 +917,31 @@ const DetailPlaceholder = ({ content, paneWidth }: { content: DetailPlaceholderC
 	)
 
 	return (
-		<box flexDirection="column">
-			<box flexDirection="column" paddingLeft={1} paddingRight={1}>
-				<PlainLine text={`${offset}┌${"─".repeat(cardInnerWidth)}┐`} fg={colors.separator} />
-				{contentLine(content.title, colors.count, true)}
-				{contentLine(content.hint, colors.muted)}
-				<PlainLine text={`${offset}└${"─".repeat(cardInnerWidth)}┘`} fg={colors.separator} />
-			</box>
-			<box height={1}><Divider width={paneWidth} /></box>
+		<box flexDirection="column" paddingLeft={1} paddingRight={1}>
+			<PlainLine text={`${offset}┌${"─".repeat(cardInnerWidth)}┐`} fg={colors.separator} />
+			{contentLine(content.title, colors.count, true)}
+			{contentLine(content.hint, colors.muted)}
+			<PlainLine text={`${offset}└${"─".repeat(cardInnerWidth)}┘`} fg={colors.separator} />
+		</box>
+	)
+}
+
+const DetailPlaceholder = ({ content, paneWidth }: { content: DetailPlaceholderContent; paneWidth: number }) => (
+	<box flexDirection="column">
+		<StatusCard content={content} width={paneWidth} />
+		<box height={1}><Divider width={paneWidth} /></box>
+	</box>
+)
+
+const LoadingPane = ({ content, width, height }: { content: DetailPlaceholderContent; width: number; height: number }) => {
+	const topRows = Math.max(0, Math.floor((height - DETAIL_PLACEHOLDER_ROWS) / 2))
+	const bottomRows = Math.max(0, height - topRows - DETAIL_PLACEHOLDER_ROWS)
+
+	return (
+		<box height={height} flexDirection="column">
+			{Array.from({ length: topRows }, (_, index) => <BlankRow key={`top-${index}`} />)}
+			<StatusCard content={content} width={width} />
+			{Array.from({ length: bottomRows }, (_, index) => <BlankRow key={`bottom-${index}`} />)}
 		</box>
 	)
 }
@@ -1100,6 +1166,7 @@ export const App = () => {
 		: AsyncResult.isFailure(pullRequestResult)
 			? "error"
 			: "ready"
+	const isInitialLoading = pullRequestStatus === "loading" && pullRequests.length === 0
 	const pullRequestError = AsyncResult.isFailure(pullRequestResult) ? errorMessage(Cause.squash(pullRequestResult.cause)) : null
 	const username = AsyncResult.isSuccess(usernameResult) ? usernameResult.value : null
 
@@ -1172,30 +1239,13 @@ export const App = () => {
 
 	const selectedPullRequest = visiblePullRequests[selectedIndex] ?? null
 	const loadingIndicator = LOADING_FRAMES[loadingFrame % LOADING_FRAMES.length]!
-	const detailPlaceholderContent: DetailPlaceholderContent = pullRequestStatus === "loading"
-		? {
-			title: `${loadingIndicator} Loading pull requests`,
-			hint: retryProgress ? `Retry ${retryProgress.attempt}/${retryProgress.max}` : "Fetching latest open PRs",
-		}
-		: pullRequestStatus === "error"
-			? {
-				title: "Could not load pull requests",
-				hint: "Press r to retry",
-			}
-			: visiblePullRequests.length === 0 && visibleFilterText.length > 0
-				? {
-					title: "No matching pull requests",
-					hint: "Press esc to clear the filter",
-				}
-				: visiblePullRequests.length === 0
-					? {
-						title: "No open pull requests",
-						hint: "Press r to refresh",
-					}
-					: {
-						title: "Select a pull request",
-						hint: "Use up/down to move",
-					}
+	const detailPlaceholderContent = getDetailPlaceholderContent({
+		status: pullRequestStatus,
+		retryProgress,
+		loadingIndicator,
+		visibleCount: visiblePullRequests.length,
+		filterText: visibleFilterText,
+	})
 	const titleWrapWidth = Math.max(1, rightPaneWidth - 2) // account for paddingLeft/paddingRight in detail pane
 	const titleLines = selectedPullRequest ? wrapText(selectedPullRequest.title, titleWrapWidth).length : 1
 	const detailDividerRow = 1 + titleLines + 1 // info row + title lines + labels row
@@ -1564,12 +1614,14 @@ export const App = () => {
 			<box paddingLeft={1} paddingRight={1} flexDirection="column">
 				<PlainLine text={headerLine} fg={colors.muted} bold />
 			</box>
-			{isWideLayout && !detailFullView ? (
+			{isWideLayout && !detailFullView && !isInitialLoading ? (
 				<Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┬" />
 			) : (
 				<Divider width={contentWidth} />
 			)}
-			{isWideLayout && detailFullView ? (
+			{isInitialLoading ? (
+				<LoadingPane content={detailPlaceholderContent} width={contentWidth} height={wideBodyHeight} />
+			) : isWideLayout && detailFullView ? (
 				<box flexGrow={1} flexDirection="column">
 					<scrollbox flexGrow={1}>
 						<DetailsPane
@@ -1629,7 +1681,7 @@ export const App = () => {
 				</>
 			)}
 
-			{isWideLayout && !detailFullView ? (
+			{isWideLayout && !detailFullView && !isInitialLoading ? (
 				<Divider width={contentWidth} junctionAt={dividerJunctionAt} junctionChar="┴" />
 			) : (
 				<Divider width={contentWidth} />
