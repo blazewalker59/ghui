@@ -1,6 +1,6 @@
 import { Context, Effect, Layer } from "effect"
 import { config } from "../config.js"
-import type { CheckItem, PullRequestItem, PullRequestMergeAction, PullRequestMergeInfo } from "../domain.js"
+import type { CheckItem, PullRequestItem, PullRequestMergeAction, PullRequestMergeInfo, PullRequestSource } from "../domain.js"
 import { getMergeActionDefinition } from "../mergeActions.js"
 import { CommandRunner, type CommandError, type JsonParseError } from "./CommandRunner.js"
 
@@ -75,6 +75,10 @@ interface GraphQLSearchSummaryResponse {
 }
 
 interface GitHubViewer {
+	readonly login: string
+}
+
+interface GitHubOrganization {
 	readonly login: string
 }
 
@@ -235,7 +239,19 @@ const getCheckInfoFromContexts = (contexts: readonly GraphQLCheckContext[]): Pic
 const getCheckInfo = (item: GitHubPullRequestNode): Pick<PullRequestItem, "checkStatus" | "checkSummary" | "checks"> =>
 	getCheckInfoFromContexts(item.statusCheckRollup?.contexts.nodes ?? [])
 
-const parsePullRequest = (item: GitHubPullRequestNode): PullRequestItem => {
+
+interface PullRequestSearchMatch<TNode extends GitHubPullRequestSummaryNode = GitHubPullRequestSummaryNode> {
+	readonly node: TNode
+	readonly source: PullRequestSource
+}
+
+const emptyPullRequestSource = (): PullRequestSource => ({
+	authored: false,
+	reviewRequested: false,
+	organization: false,
+})
+
+const parsePullRequest = ({ node: item, source }: PullRequestSearchMatch<GitHubPullRequestNode>): PullRequestItem => {
 	const checkInfo = getCheckInfo(item)
 
 	return {
@@ -243,6 +259,7 @@ const parsePullRequest = (item: GitHubPullRequestNode): PullRequestItem => {
 		number: item.number,
 		title: item.title,
 		body: item.body,
+		source,
 		labels: item.labels.nodes.map((label) => ({
 			name: label.name,
 			color: label.color ? `#${label.color}` : null,
@@ -263,11 +280,12 @@ const parsePullRequest = (item: GitHubPullRequestNode): PullRequestItem => {
 	}
 }
 
-const parsePullRequestSummary = (item: GitHubPullRequestSummaryNode): PullRequestItem => ({
+const parsePullRequestSummary = ({ node: item, source }: PullRequestSearchMatch): PullRequestItem => ({
 	repository: item.repository.nameWithOwner,
 	number: item.number,
 	title: item.title,
 	body: "",
+	source,
 	labels: [],
 	additions: 0,
 	deletions: 0,
@@ -284,7 +302,42 @@ const parsePullRequestSummary = (item: GitHubPullRequestSummaryNode): PullReques
 	url: item.url,
 })
 
-const searchQuery = (author: string) => `author:${author} is:pr is:open sort:created-desc`
+const authoredSearchQuery = (author: string) => `author:${author} is:pr is:open archived:false sort:created-desc`
+const reviewRequestedSearchQuery = (author: string) => `review-requested:${author} is:pr is:open archived:false sort:created-desc`
+const organizationSearchQuery = (organization: string) => `org:${organization} is:pr is:open archived:false sort:created-desc`
+
+const pullRequestKey = (item: Pick<GitHubPullRequestSummaryNode, "number" | "repository">) => `${item.repository.nameWithOwner}#${item.number}`
+
+const mergeSearchResults = (
+	authoredResults: readonly GitHubPullRequestSummaryNode[],
+	reviewRequestedResults: readonly GitHubPullRequestSummaryNode[],
+	organizationResults: readonly GitHubPullRequestSummaryNode[],
+): PullRequestSearchMatch[] => {
+	const pullRequests = new Map<string, PullRequestSearchMatch>()
+
+	const mergeResult = (node: GitHubPullRequestSummaryNode, update: (source: PullRequestSource) => PullRequestSource) => {
+		const key = pullRequestKey(node)
+		const existing = pullRequests.get(key)
+		pullRequests.set(key, {
+			node: existing?.node ?? node,
+			source: update(existing?.source ?? emptyPullRequestSource()),
+		})
+	}
+
+	for (const result of authoredResults) {
+		mergeResult(result, (source) => ({ ...source, authored: true }))
+	}
+
+	for (const result of reviewRequestedResults) {
+		mergeResult(result, (source) => ({ ...source, reviewRequested: true }))
+	}
+
+	for (const result of organizationResults) {
+		mergeResult(result, (source) => ({ ...source, organization: true }))
+	}
+
+	return [...pullRequests.values()]
+}
 
 type GitHubError = CommandError | JsonParseError
 
@@ -311,8 +364,8 @@ export class GitHubService extends Context.Service<GitHubService, {
 		Effect.gen(function*() {
 			const command = yield* CommandRunner
 
-			const listOpenPullRequests = Effect.fn("GitHubService.listOpenPullRequests")(function*() {
-				const pullRequests: PullRequestItem[] = []
+			const listSearchSummaries = Effect.fn("GitHubService.listSearchSummaries")(function*(searchQuery: string) {
+				const pullRequests: GitHubPullRequestSummaryNode[] = []
 				let cursor: string | null = null
 
 				while (pullRequests.length < config.prFetchLimit) {
@@ -320,13 +373,13 @@ export class GitHubService extends Context.Service<GitHubService, {
 					const response: GraphQLSearchSummaryResponse = yield* command.runJson<GraphQLSearchSummaryResponse>("gh", [
 						"api", "graphql",
 						"-f", `query=${pullRequestSummarySearchQuery}`,
-						"-F", `searchQuery=${searchQuery(config.author)}`,
+						"-F", `searchQuery=${searchQuery}`,
 						"-F", `first=${pageSize}`,
 						...(cursor ? ["-F", `after=${cursor}`] : []),
 					])
 
 					for (const node of response.data.search.nodes) {
-						if (node) pullRequests.push(parsePullRequestSummary(node))
+						if (node) pullRequests.push(node)
 					}
 
 					if (!response.data.search.pageInfo.hasNextPage) break
@@ -334,11 +387,11 @@ export class GitHubService extends Context.Service<GitHubService, {
 					if (!cursor) break
 				}
 
-				return pullRequests.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+				return pullRequests
 			})
 
-			const listOpenPullRequestDetails = Effect.fn("GitHubService.listOpenPullRequestDetails")(function*() {
-				const pullRequests: PullRequestItem[] = []
+			const listSearchDetails = Effect.fn("GitHubService.listSearchDetails")(function*(searchQuery: string) {
+				const pullRequests: GitHubPullRequestNode[] = []
 				let cursor: string | null = null
 
 				while (pullRequests.length < config.prFetchLimit) {
@@ -346,19 +399,72 @@ export class GitHubService extends Context.Service<GitHubService, {
 					const response: GraphQLSearchResponse = yield* command.runJson<GraphQLSearchResponse>("gh", [
 						"api", "graphql",
 						"-f", `query=${pullRequestSearchQuery}`,
-						"-F", `searchQuery=${searchQuery(config.author)}`,
+						"-F", `searchQuery=${searchQuery}`,
 						"-F", `first=${pageSize}`,
 						...(cursor ? ["-F", `after=${cursor}`] : []),
 					])
 
 					for (const node of response.data.search.nodes) {
-						if (node) pullRequests.push(parsePullRequest(node))
+						if (node) pullRequests.push(node)
 					}
 
 					if (!response.data.search.pageInfo.hasNextPage) break
 					cursor = response.data.search.pageInfo.endCursor
 					if (!cursor) break
 				}
+
+				return pullRequests
+			})
+
+			const listOrganizationLogins = Effect.fn("GitHubService.listOrganizationLogins")(function*() {
+				const organizations = yield* command.runJson<readonly GitHubOrganization[]>("gh", ["api", "user/orgs?per_page=100"])
+				return organizations.map((organization) => organization.login)
+			})
+
+			const listOpenPullRequests = Effect.fn("GitHubService.listOpenPullRequests")(function*() {
+				const authoredResults = yield* listSearchSummaries(authoredSearchQuery(config.author))
+				const reviewRequestedResults = config.includeReviewRequested
+					? yield* listSearchSummaries(reviewRequestedSearchQuery(config.author))
+					: []
+				const organizationResults = config.includeOrganizationPullRequests
+					? yield* Effect.gen(function*() {
+						const organizations = yield* listOrganizationLogins()
+						const pullRequestGroups = yield* Effect.forEach(
+							organizations,
+							Effect.fn("GitHubService.listOrganizationSummaries")(function*(organization) {
+								return yield* listSearchSummaries(organizationSearchQuery(organization))
+							}),
+							{ concurrency: 4 },
+						)
+						return pullRequestGroups.flat()
+					})
+					: []
+				const pullRequests = mergeSearchResults(authoredResults, reviewRequestedResults, organizationResults)
+					.map(parsePullRequestSummary)
+
+				return pullRequests.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+			})
+
+			const listOpenPullRequestDetails = Effect.fn("GitHubService.listOpenPullRequestDetails")(function*() {
+				const authoredResults = yield* listSearchDetails(authoredSearchQuery(config.author))
+				const reviewRequestedResults = config.includeReviewRequested
+					? yield* listSearchDetails(reviewRequestedSearchQuery(config.author))
+					: []
+				const organizationResults = config.includeOrganizationPullRequests
+					? yield* Effect.gen(function*() {
+						const organizations = yield* listOrganizationLogins()
+						const pullRequestGroups = yield* Effect.forEach(
+							organizations,
+							Effect.fn("GitHubService.listOrganizationDetails")(function*(organization) {
+								return yield* listSearchDetails(organizationSearchQuery(organization))
+							}),
+							{ concurrency: 4 },
+						)
+						return pullRequestGroups.flat()
+					})
+					: []
+				const pullRequests = mergeSearchResults(authoredResults, reviewRequestedResults, organizationResults)
+					.map((match) => parsePullRequest(match as PullRequestSearchMatch<GitHubPullRequestNode>))
 
 				return pullRequests.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
 			})
