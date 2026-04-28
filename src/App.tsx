@@ -18,7 +18,7 @@ import { DetailBody, DetailHeader, DetailPlaceholder, DetailsPane, getDetailBody
 import { FooterHints, type RetryProgress } from "./ui/FooterHints.js"
 import { Divider, fitCell, PlainLine, SeparatorColumn } from "./ui/primitives.js"
 import { initialLabelModalState, initialMergeModalState, initialThemeModalState, LabelModal, MergeModal, ThemeModal } from "./ui/modals.js"
-import { groupBy, reviewLabel } from "./ui/pullRequests.js"
+import { groupBy, groupPullRequestsByOrg, isOrgGroups, reviewLabel } from "./ui/pullRequests.js"
 import { PullRequestDiffPane } from "./ui/PullRequestDiffPane.js"
 import { PullRequestList } from "./ui/PullRequestList.js"
 
@@ -363,18 +363,37 @@ export const App = () => {
 	}), [pullRequests, effectiveFilterQuery])
 
 	const visibleGroups = useMemo(
-		() => groupBy(filteredPullRequests, (pullRequest) => pullRequest.repository),
+		() => config.groupByOrg
+			? groupPullRequestsByOrg(filteredPullRequests)
+			: groupBy(filteredPullRequests, (pullRequest) => pullRequest.repository),
 		[filteredPullRequests],
 	)
-	const visiblePullRequests = useMemo(() => visibleGroups.flatMap(([, pullRequests]) => pullRequests), [visibleGroups])
-	const groupStarts = useMemo(() => visibleGroups.reduce<Array<number>>((starts, [, pullRequests], index) => {
-		if (index === 0) {
-			starts.push(0)
-			return starts
-		}
-		starts.push(starts[index - 1]! + visibleGroups[index - 1]![1].length)
-		return starts
-	}, []), [visibleGroups])
+	const visiblePullRequests = useMemo(
+		() => isOrgGroups(visibleGroups)
+			? visibleGroups.flatMap((group) => group.repositories.flatMap((repository) => repository.pullRequests))
+			: visibleGroups.flatMap(([, pullRequests]) => pullRequests),
+		[visibleGroups],
+	)
+	const groupStarts = useMemo(
+		() => isOrgGroups(visibleGroups)
+			? visibleGroups.flatMap((group) => group.repositories).reduce<Array<number>>((starts, repository, index, repositories) => {
+				if (index === 0) {
+					starts.push(0)
+					return starts
+				}
+				starts.push(starts[index - 1]! + repositories[index - 1]!.pullRequests.length)
+				return starts
+			}, [])
+			: visibleGroups.reduce<Array<number>>((starts, [, pullRequests], index) => {
+				if (index === 0) {
+					starts.push(0)
+					return starts
+				}
+				starts.push(starts[index - 1]! + visibleGroups[index - 1]![1].length)
+				return starts
+			}, []),
+		[visibleGroups],
+	)
 	const getCurrentGroupIndex = (current: number) => {
 		for (let index = groupStarts.length - 1; index >= 0; index--) {
 			if (groupStarts[index]! <= current) return index
@@ -1270,6 +1289,7 @@ export const App = () => {
 		filterText: visibleFilterText,
 		showFilterBar: filterMode || filterQuery.length > 0,
 		isFilterEditing: filterMode,
+		showPullRequestSource: config.showPullRequestSource,
 		onSelectPullRequest: selectPullRequestByUrl,
 	} as const
 

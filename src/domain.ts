@@ -13,11 +13,18 @@ export interface PullRequestLabel {
 	readonly color: string | null
 }
 
+export interface PullRequestSource {
+	readonly authored: boolean
+	readonly reviewRequested: boolean
+	readonly organization: boolean
+}
+
 export interface PullRequestItem {
 	readonly repository: string
 	readonly number: number
 	readonly title: string
 	readonly body: string
+	readonly source: PullRequestSource
 	readonly labels: readonly PullRequestLabel[]
 	readonly additions: number
 	readonly deletions: number

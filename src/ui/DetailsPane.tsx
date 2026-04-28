@@ -1,11 +1,12 @@
 import { TextAttributes } from "@opentui/core"
 import { Fragment, useMemo } from "react"
+import { config } from "../config.js"
 import { formatRelativeDate } from "../date.js"
 import type { CheckItem, PullRequestItem } from "../domain.js"
 import { colors, type ThemeId } from "./colors.js"
 import { diffStatText } from "./diff.js"
 import { centerCell, Divider, fitCell, PlainLine, TextLine } from "./primitives.js"
-import { labelColor, labelTextColor, reviewLabel, shortRepoName, statusColor } from "./pullRequests.js"
+import { labelColor, labelTextColor, reviewLabel, shortRepoName, sourceColor, sourceLabel, statusColor } from "./pullRequests.js"
 
 interface PreviewLine {
 	readonly segments: ReadonlyArray<{
@@ -327,9 +328,10 @@ export const DetailHeader = ({
 				const opened = formatRelativeDate(pullRequest.createdAt)
 				const repo = shortRepoName(pullRequest.repository)
 				const number = String(pullRequest.number)
+				const source = config.showPullRequestSource ? sourceLabel(pullRequest.source) : ""
 				const review = reviewLabel(pullRequest)
 				const checks = pullRequest.checkSummary?.replace(/^checks\s+/, "")
-				const statusParts = [review, checks].filter((part): part is string => Boolean(part))
+				const statusParts = [source.length > 0 ? source : null, review, checks].filter((part): part is string => Boolean(part))
 				const rightSide = statusParts.length > 0 ? `${statusParts.join(" ")} ${opened}` : opened
 				const leftWidth = 1 + number.length + 1 + repo.length
 				const gap = Math.max(2, contentWidth - leftWidth - rightSide.length)
@@ -339,6 +341,8 @@ export const DetailHeader = ({
 						<span fg={colors.count}>#{number}</span>
 						<span fg={colors.muted}> {repo}</span>
 						<span fg={colors.muted}>{" ".repeat(gap)}</span>
+						{source.length > 0 ? <span fg={sourceColor(pullRequest.source)}>{source}</span> : null}
+						{source.length > 0 && (review || checks) ? <span fg={colors.muted}> </span> : null}
 						{review ? <span fg={statusColor(pullRequest.reviewStatus)}>{review}</span> : null}
 						{review && checks ? <span fg={colors.muted}> </span> : null}
 						{checks ? <span fg={statusColor(pullRequest.checkStatus)}>{checks}</span> : null}

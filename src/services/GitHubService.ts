@@ -239,7 +239,6 @@ const getCheckInfoFromContexts = (contexts: readonly GraphQLCheckContext[]): Pic
 const getCheckInfo = (item: GitHubPullRequestNode): Pick<PullRequestItem, "checkStatus" | "checkSummary" | "checks"> =>
 	getCheckInfoFromContexts(item.statusCheckRollup?.contexts.nodes ?? [])
 
-
 interface PullRequestSearchMatch<TNode extends GitHubPullRequestSummaryNode = GitHubPullRequestSummaryNode> {
 	readonly node: TNode
 	readonly source: PullRequestSource
@@ -308,14 +307,14 @@ const organizationSearchQuery = (organization: string) => `org:${organization} i
 
 const pullRequestKey = (item: Pick<GitHubPullRequestSummaryNode, "number" | "repository">) => `${item.repository.nameWithOwner}#${item.number}`
 
-const mergeSearchResults = (
-	authoredResults: readonly GitHubPullRequestSummaryNode[],
-	reviewRequestedResults: readonly GitHubPullRequestSummaryNode[],
-	organizationResults: readonly GitHubPullRequestSummaryNode[],
-): PullRequestSearchMatch[] => {
+const mergeSearchResults = <TNode extends GitHubPullRequestSummaryNode>(
+	authoredResults: readonly TNode[],
+	reviewRequestedResults: readonly TNode[],
+	organizationResults: readonly TNode[],
+): PullRequestSearchMatch<TNode>[] => {
 	const pullRequests = new Map<string, PullRequestSearchMatch>()
 
-	const mergeResult = (node: GitHubPullRequestSummaryNode, update: (source: PullRequestSource) => PullRequestSource) => {
+	const mergeResult = (node: TNode, update: (source: PullRequestSource) => PullRequestSource) => {
 		const key = pullRequestKey(node)
 		const existing = pullRequests.get(key)
 		pullRequests.set(key, {
@@ -336,7 +335,7 @@ const mergeSearchResults = (
 		mergeResult(result, (source) => ({ ...source, organization: true }))
 	}
 
-	return [...pullRequests.values()]
+	return [...pullRequests.values()] as PullRequestSearchMatch<TNode>[]
 }
 
 type GitHubError = CommandError | JsonParseError
@@ -464,7 +463,7 @@ export class GitHubService extends Context.Service<GitHubService, {
 					})
 					: []
 				const pullRequests = mergeSearchResults(authoredResults, reviewRequestedResults, organizationResults)
-					.map((match) => parsePullRequest(match as PullRequestSearchMatch<GitHubPullRequestNode>))
+					.map(parsePullRequest)
 
 				return pullRequests.sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
 			})
