@@ -49,6 +49,7 @@ After that, publish by creating a GitHub Release whose tag matches `package.json
 - `GHUI_PR_FETCH_LIMIT`: max PRs fetched, defaults to `200`
 - `GHUI_INCLUDE_REVIEW_REQUESTED`: include PRs requesting your review, defaults to `false`
 - `GHUI_SHOW_PR_SOURCE`: show authored/review-requested source in the UI, defaults to `false`
+- `GHUI_GROUP_BY_ORG`: group the list by org and then repo, defaults to `false`
 
 Example:
 
