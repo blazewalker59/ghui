@@ -1,7 +1,7 @@
 import { TextAttributes } from "@opentui/core"
 import type { PullRequestLabel, PullRequestMergeInfo } from "../domain.js"
 import { availableMergeActions } from "../mergeActions.js"
-import { colors, themeDefinitions, type ThemeId } from "./colors.js"
+import { colors, filterThemeDefinitions, themeDefinitions, type ThemeId } from "./colors.js"
 import { centerCell, Divider, fitCell, ModalFrame, PlainLine, TextLine } from "./primitives.js"
 import { labelColor, shortRepoName } from "./pullRequests.js"
 
@@ -27,6 +27,8 @@ export interface MergeModalState {
 
 export interface ThemeModalState {
 	readonly open: boolean
+	readonly query: string
+	readonly filterMode: boolean
 	readonly initialThemeId: ThemeId
 }
 
@@ -52,6 +54,8 @@ export const initialMergeModalState: MergeModalState = {
 
 export const initialThemeModalState: ThemeModalState = {
 	open: false,
+	query: "",
+	filterMode: false,
 	initialThemeId: "ghui",
 }
 
@@ -276,21 +280,27 @@ export const ThemeModal = ({
 	const innerWidth = Math.max(16, modalWidth - 2)
 	const contentWidth = Math.max(14, innerWidth - 2)
 	const rowWidth = innerWidth
-	const maxVisible = Math.max(1, modalHeight - 7)
-	const activeIndex = themeDefinitions.findIndex((theme) => theme.id === activeThemeId)
+	const filteredThemes = filterThemeDefinitions(state.query)
+	const maxVisible = Math.max(1, modalHeight - 8)
+	const activeIndex = filteredThemes.findIndex((theme) => theme.id === activeThemeId)
 	const selectedIndex = Math.max(0, activeIndex)
-	const selectedTheme = themeDefinitions[selectedIndex]!
+	const selectedTheme = filteredThemes[selectedIndex] ?? themeDefinitions.find((theme) => theme.id === activeThemeId) ?? themeDefinitions[0]!
 	const scrollStart = Math.min(
-		Math.max(0, themeDefinitions.length - maxVisible),
+		Math.max(0, filteredThemes.length - maxVisible),
 		Math.max(0, selectedIndex - maxVisible + 1),
 	)
-	const visibleThemes = themeDefinitions.slice(scrollStart, scrollStart + maxVisible)
-	const countText = `${selectedIndex + 1}/${themeDefinitions.length}`
+	const visibleThemes = filteredThemes.slice(scrollStart, scrollStart + maxVisible)
+	const countText = `${filteredThemes.length === 0 ? 0 : selectedIndex + 1}/${filteredThemes.length}`
 	const title = "Themes"
 	const headerGap = Math.max(1, contentWidth - title.length - countText.length)
+	const queryText = state.query.length > 0 ? state.query : "type to filter themes"
+	const queryPrefix = "/ "
+	const queryWidth = Math.max(1, contentWidth - queryPrefix.length)
+	const messageTopRows = Math.max(0, Math.floor((maxVisible - 1) / 2))
+	const messageBottomRows = Math.max(0, maxVisible - messageTopRows - 1)
 
 	return (
-		<ModalFrame left={offsetLeft} top={offsetTop} width={modalWidth} height={modalHeight} junctionRows={[2, modalHeight - 4]}>
+		<ModalFrame left={offsetLeft} top={offsetTop} width={modalWidth} height={modalHeight} junctionRows={[3, modalHeight - 4]}>
 			<box height={1} paddingLeft={1} paddingRight={1}>
 				<TextLine>
 					<span fg={colors.accent} attributes={TextAttributes.BOLD}>{title}</span>
@@ -301,9 +311,21 @@ export const ThemeModal = ({
 			<box height={1} paddingLeft={1} paddingRight={1}>
 				<PlainLine text={fitCell(selectedTheme.description, contentWidth)} fg={colors.muted} />
 			</box>
+			<box height={1} paddingLeft={1} paddingRight={1}>
+				<TextLine>
+					<span fg={colors.count}>{queryPrefix}</span>
+					<span fg={state.query.length > 0 ? colors.text : colors.muted}>{fitCell(queryText, queryWidth)}</span>
+				</TextLine>
+			</box>
 			<Divider width={innerWidth} />
 			<box height={maxVisible} flexDirection="column">
-				{visibleThemes.map((theme, index) => {
+				{visibleThemes.length === 0 ? (
+					<>
+						{Array.from({ length: messageTopRows }, (_, index) => <box key={`top-${index}`} height={1} />)}
+						<PlainLine text={centerCell("No matching themes", rowWidth)} fg={colors.muted} />
+						{Array.from({ length: messageBottomRows }, (_, index) => <box key={`bottom-${index}`} height={1} />)}
+					</>
+				) : visibleThemes.map((theme, index) => {
 					const actualIndex = scrollStart + index
 					const isSelected = actualIndex === selectedIndex
 					const isActive = theme.id === activeThemeId
@@ -317,7 +339,7 @@ export const ThemeModal = ({
 							<span> </span>
 							<span>{fitCell(theme.name, nameWidth)}</span>
 							<span bg={theme.colors.background}> </span>
-							<span bg={theme.colors.panel}> </span>
+							<span bg={theme.colors.modalBackground}> </span>
 							<span bg={theme.colors.accent}> </span>
 							<span bg={theme.colors.status.passing}> </span>
 							<span bg={theme.colors.status.failing}> </span>
@@ -331,6 +353,8 @@ export const ThemeModal = ({
 				<TextLine>
 					<span fg={colors.count}>↑↓</span>
 					<span fg={colors.muted}> preview  </span>
+					<span fg={colors.count}>/</span>
+					<span fg={colors.muted}> filter  </span>
 					<span fg={colors.count}>enter</span>
 					<span fg={colors.muted}> select  </span>
 					<span fg={colors.count}>esc</span>

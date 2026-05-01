@@ -11,7 +11,7 @@ import { formatShortDate, formatTimestamp } from "./date.js"
 import { availableMergeActions, mergeInfoFromPullRequest } from "./mergeActions.js"
 import { Observability } from "./observability.js"
 import { GitHubService } from "./services/GitHubService.js"
-import { colors, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
+import { colors, filterThemeDefinitions, setActiveTheme, themeDefinitions, type ThemeId } from "./ui/colors.js"
 import { pullRequestDiffKey, splitPatchFiles, type PullRequestDiffState } from "./ui/diff.js"
 import { DetailBody, DetailHeader, DetailPlaceholder, DetailsPane, getDetailBodyHeight, getDetailHeaderHeight, getDetailJunctionRows, getDetailsPaneHeight, LoadingPane, type DetailPlaceholderContent } from "./ui/DetailsPane.js"
 import { FooterHints, type RetryProgress } from "./ui/FooterHints.js"
@@ -264,6 +264,10 @@ export const App = () => {
 	const [themeId, setThemeId] = useAtom(themeIdAtom)
 	const [themeModal, setThemeModal] = useAtom(themeModalAtom)
 	setActiveTheme(themeId)
+	const themeIdRef = useRef(themeId)
+	const themeModalRef = useRef(themeModal)
+	themeIdRef.current = themeId
+	themeModalRef.current = themeModal
 	const [labelCache, setLabelCache] = useAtom(labelCacheAtom)
 	const [pullRequestOverrides, setPullRequestOverrides] = useAtom(pullRequestOverridesAtom)
 	const retryProgress = useAtomValue(retryProgressAtom)
@@ -559,12 +563,14 @@ export const App = () => {
 		setMergeModal(initialMergeModalState)
 		setThemeModal({
 			open: true,
+			query: "",
+			filterMode: false,
 			initialThemeId: themeId,
 		})
 	}
 
 	const closeThemeModal = (confirm: boolean) => {
-		const selectedTheme = themeDefinitions.find((theme) => theme.id === themeId)
+		const selectedTheme = themeDefinitions.find((theme) => theme.id === themeIdRef.current)
 		if (!confirm) {
 			setThemeId(themeModal.initialThemeId)
 		} else if (selectedTheme) {
@@ -573,12 +579,42 @@ export const App = () => {
 		setThemeModal(initialThemeModalState)
 	}
 
+	const previewTheme = (id: ThemeId) => {
+		if (id === themeIdRef.current) return
+		themeIdRef.current = id
+		setThemeId(id)
+	}
+
 	const moveThemeSelection = (delta: number) => {
-		const currentIndex = Math.max(0, themeDefinitions.findIndex((theme) => theme.id === themeId))
-		const selectedIndex = Math.max(0, Math.min(themeDefinitions.length - 1, currentIndex + delta))
+		const filteredThemes = filterThemeDefinitions(themeModalRef.current.query)
+		if (filteredThemes.length === 0) return
+		const currentIndex = Math.max(0, filteredThemes.findIndex((theme) => theme.id === themeIdRef.current))
+		const selectedIndex = Math.max(0, Math.min(filteredThemes.length - 1, currentIndex + delta))
 		if (selectedIndex === currentIndex) return
-		const theme = themeDefinitions[selectedIndex]
-		if (theme && theme.id !== themeId) setThemeId(theme.id)
+		const theme = filteredThemes[selectedIndex]
+		if (theme) previewTheme(theme.id)
+	}
+
+	const updateThemeQuery = (query: string, options: { readonly previewFirst?: boolean; readonly filterMode?: boolean } = {}) => {
+		const current = themeModalRef.current
+		const next = {
+			...current,
+			query,
+			filterMode: options.filterMode ?? current.filterMode,
+		}
+		if (next.query === current.query && next.filterMode === current.filterMode) return
+
+		themeModalRef.current = next
+		setThemeModal(next)
+
+		if (options.previewFirst && query.trim().length > 0) {
+			const firstTheme = filterThemeDefinitions(query)[0]
+			if (firstTheme) previewTheme(firstTheme.id)
+		}
+	}
+
+	const editThemeQuery = (transform: (query: string) => string) => {
+		updateThemeQuery(transform(themeModalRef.current.query), { previewFirst: true })
 	}
 
 	const openLabelModal = () => {
@@ -714,7 +750,7 @@ export const App = () => {
 	}
 
 	useKeyboard((key) => {
-		if (key.name === "q" || (key.ctrl && key.name === "c")) {
+		if ((key.name === "q" && !(themeModal.open && themeModal.filterMode)) || (key.ctrl && key.name === "c")) {
 			if (themeModal.open) {
 				closeThemeModal(false)
 				return
@@ -733,19 +769,40 @@ export const App = () => {
 
 		if (themeModal.open) {
 			if (key.name === "escape") {
+				if (themeModal.filterMode) {
+					updateThemeQuery("", { filterMode: false })
+					return
+				}
 				closeThemeModal(false)
 				return
 			}
+			if (key.name === "/") {
+				updateThemeQuery("", { filterMode: true })
+				return
+			}
 			if (key.name === "return" || key.name === "enter") {
+				if (themeModal.filterMode && filterThemeDefinitions(themeModal.query).length === 0) return
 				closeThemeModal(true)
 				return
 			}
-			if (key.name === "up" || key.name === "k") {
+			if (key.name === "up" || (!themeModal.filterMode && key.name === "k")) {
 				moveThemeSelection(-1)
 				return
 			}
-			if (key.name === "down" || key.name === "j") {
+			if (key.name === "down" || (!themeModal.filterMode && key.name === "j")) {
 				moveThemeSelection(1)
+				return
+			}
+			if (themeModal.filterMode && key.name === "backspace") {
+				editThemeQuery((query) => query.slice(0, -1))
+				return
+			}
+			if (themeModal.filterMode && key.ctrl && key.name === "u") {
+				updateThemeQuery("")
+				return
+			}
+			if (themeModal.filterMode && !key.ctrl && !key.meta && key.sequence.length === 1 && key.name !== "return") {
+				editThemeQuery((query) => query + key.sequence)
 				return
 			}
 			return
@@ -1229,7 +1286,7 @@ export const App = () => {
 
 	return (
 		<box width={terminalWidth} height={terminalHeight} flexDirection="column" backgroundColor={colors.background}>
-			<box paddingLeft={1} paddingRight={1} flexDirection="column" backgroundColor={colors.panel}>
+			<box paddingLeft={1} paddingRight={1} flexDirection="column" backgroundColor={colors.background}>
 				<PlainLine text={headerLine} fg={colors.muted} bold />
 			</box>
 			{isWideLayout && !detailFullView && !diffFullView && !isInitialLoading ? (
@@ -1321,7 +1378,7 @@ export const App = () => {
 			) : (
 				<Divider width={contentWidth} />
 			)}
-			<box paddingLeft={1} paddingRight={1} backgroundColor={colors.footer}>
+			<box paddingLeft={1} paddingRight={1} backgroundColor={colors.background}>
 				{footerNotice ? (
 					<PlainLine text={footerNotice} fg={colors.count} />
 				) : (
