@@ -1,8 +1,8 @@
 # ghui
 
-<img width="1420" height="856" alt="image" src="https://github.com/user-attachments/assets/5e560a4a-5887-4baa-a6d4-e1f4f0410c70" />
+Terminal UI for keeping up with your open GitHub pull requests across repositories.
 
-Terminal UI for browsing and acting on your open GitHub pull requests across repositories.
+`ghui` gives you one keyboard-driven place to review PR details, inspect diffs, manage labels, toggle draft state, merge, open PRs in GitHub, and copy PR metadata without leaving the terminal.
 
 ## Install
 
@@ -10,9 +10,20 @@ Terminal UI for browsing and acting on your open GitHub pull requests across rep
 npm install -g @kitlangton/ghui
 ```
 
-Requires `bun` and an authenticated GitHub CLI (`gh auth login`).
+Requirements:
 
-## Install Locally
+- Bun runtime installed
+- GitHub CLI installed and authenticated with `gh auth login`
+
+Run it from anywhere:
+
+```bash
+ghui
+```
+
+<img width="1420" height="856" alt="image" src="https://github.com/user-attachments/assets/5e560a4a-5887-4baa-a6d4-e1f4f0410c70" />
+
+## Local Development
 
 Clone, install, and link:
 
@@ -22,26 +33,6 @@ cd ghui
 bun install
 bun link
 ```
-
-Run from anywhere:
-
-```bash
-ghui
-```
-
-## Publish
-
-This package publishes from GitHub Releases using npm Trusted Publishing.
-
-The first npm publish has already created the package. Configure npm Trusted Publishing:
-
-- Package: `@kitlangton/ghui`
-- Publisher: GitHub Actions
-- Owner: `kitlangton`
-- Repository: `ghui`
-- Workflow filename: `publish.yml`
-
-After that, publish by creating a GitHub Release whose tag matches `package.json` version, for example `v0.1.1`.
 
 ## Configuration
 
@@ -70,7 +61,10 @@ You can also copy `.env.example` to `.env` and edit the values locally.
 - `enter`: expand details
 - `esc`: return from expanded details or close modal
 - `r`: refresh
-- `d`: toggle draft
+- `d`: view diff
+- `s`: toggle draft or ready-for-review state
+- `m`: merge
+- `t`: choose theme
 - `l`: manage labels
 - `o`: open PR in browser
 - `y`: copy PR metadata
